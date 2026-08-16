@@ -16,25 +16,41 @@ export class OrderAgent {
     // 1. Resolve Target Order ID dynamically
     let targetOrderId: string | undefined;
 
+    // Check explicit entities in query
     if (context.currentEntities.orderNumbers.length > 0) {
       targetOrderId = context.currentEntities.orderNumbers[0];
     } else if (context.isAccountLevelQuery) {
       targetOrderId = undefined;
-    } else if (
-      lower.includes("it") ||
-      lower.includes("that") ||
-      lower.includes("this order") ||
-      lower.includes("return") ||
-      lower.includes("cancel") ||
-      lower.includes("track")
-    ) {
-      targetOrderId = context.historicalEntities.orderNumbers[0];
-      if (!targetOrderId) {
-        // Look up the user latest order from the database
-        const userOrders = await orderTools.listUserOrders({ userId: user.id });
-        if (userOrders.data && userOrders.data.length > 0) {
-          targetOrderId = userOrders.data[0].orderNumber;
+    } else {
+      // 2. Fetch user orders to match by product name or recent context
+      const userOrders = await orderTools.listUserOrders({ userId: user.id });
+      const orders = userOrders.data || [];
+
+      // Check product name matches in query
+      for (const ord of orders) {
+        const summary = (ord.itemsSummary || "").toLowerCase();
+        if (
+          (lower.includes("sony") && summary.includes("sony")) ||
+          (lower.includes("headphone") && summary.includes("headphone")) ||
+          (lower.includes("iphone") && summary.includes("iphone")) ||
+          (lower.includes("macbook") && summary.includes("macbook")) ||
+          (lower.includes("mouse") && summary.includes("mouse")) ||
+          (lower.includes("ipad") && summary.includes("ipad")) ||
+          (lower.includes("server") && summary.includes("server"))
+        ) {
+          targetOrderId = ord.orderNumber;
+          break;
         }
+      }
+
+      // Check historical entities from conversation
+      if (!targetOrderId && context.historicalEntities.orderNumbers.length > 0) {
+        targetOrderId = context.historicalEntities.orderNumbers[0];
+      }
+
+      // If user only has 1 order (like Sarah), default to that single order
+      if (!targetOrderId && orders.length === 1) {
+        targetOrderId = orders[0].orderNumber;
       }
     }
 
@@ -43,7 +59,7 @@ export class OrderAgent {
       stage: "analyzing",
       agent: "ORDER",
       thought: targetOrderId
-        ? `Processing order operation for ${targetOrderId} (Customer: ${user.name}). Intent: return / cancel / track / details.`
+        ? `Targeting order ${targetOrderId} for customer ${user.name} based on entity/product match. Intent: return/status/details.`
         : `User ${user.name} requested account-level order manifest: "${query}".`,
       timestamp: now(),
     });
