@@ -26,18 +26,7 @@ export class RouterAgent {
       };
     }
 
-    // 2. Explicit Order signals (e.g. "track order", "ORDER-1001", "return my order")
-    const isOrder = /order|ordwer|track|shipping|delivery|package|carrier|fedex|ups|shipped|arrived|purchases|cancel/i.test(text);
-    const hasOrderId = context.currentEntities.orderNumbers.length > 0 || (context.historicalEntities.orderNumbers.length > 0 && !text.includes("invoice") && !text.includes("refund"));
-    if (hasOrderId || isOrder) {
-      return {
-        agentType: "ORDER",
-        confidence: 0.95,
-        rationale: `Detected order-related intent with entities: [${context.currentEntities.orderNumbers.join(", ") || "Order inquiry keyword"}]. Delegating to Order Agent.`,
-      };
-    }
-
-    // 3. Billing signals
+    // 2. Billing signals (e.g. "refund status of order 2001", "invoice INV-2024-001", "payment")
     const isBilling = /invoice|refund|payment|charge|receipt|subscription|credit card|billing|billed|money back/i.test(text);
     const hasInvoiceId = context.currentEntities.invoiceNumbers.length > 0;
     if (hasInvoiceId || isBilling) {
@@ -45,6 +34,17 @@ export class RouterAgent {
         agentType: "BILLING",
         confidence: 0.93,
         rationale: `Detected financial/billing query with terms: [${context.currentEntities.invoiceNumbers.join(", ") || "Billing transaction keyword"}]. Delegating to Billing Agent.`,
+      };
+    }
+
+    // 3. Explicit Order signals (e.g. "track order", "ORDER-1001", "return my order")
+    const isOrder = /order|ordwer|track|shipping|delivery|package|carrier|fedex|ups|shipped|arrived|purchases|cancel|return/i.test(text);
+    const hasOrderId = context.currentEntities.orderNumbers.length > 0 || (context.historicalEntities.orderNumbers.length > 0 && !text.includes("invoice") && !text.includes("refund"));
+    if (hasOrderId || isOrder) {
+      return {
+        agentType: "ORDER",
+        confidence: 0.95,
+        rationale: `Detected order-related intent with entities: [${context.currentEntities.orderNumbers.join(", ") || "Order inquiry keyword"}]. Delegating to Order Agent.`,
       };
     }
 

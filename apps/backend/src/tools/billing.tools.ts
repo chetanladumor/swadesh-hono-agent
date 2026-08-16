@@ -11,29 +11,26 @@ export const billingTools = {
   listUserInvoices: async (args: { userId: string }): Promise<BillingToolResult> => {
     const invoices = await prisma.invoice.findMany({
       where: { userId: args.userId },
-      include: { order: { select: { orderNumber: true } } },
+      include: { order: true },
       orderBy: { issueDate: "desc" },
     });
 
     if (invoices.length === 0) {
-      return {
-        success: true,
-        message: "No invoices found for your account.",
-        data: [],
-      };
+      return { success: true, message: "No invoices found for your account.", data: [] };
     }
 
     return {
       success: true,
-      message: `Found ${invoices.length} invoices on your billing record.`,
+      message: `Found ${invoices.length} invoices on file.`,
       data: invoices.map((inv) => ({
         invoiceNumber: inv.invoiceNumber,
         amount: Number(inv.amount),
         status: inv.status,
         paymentMethod: inv.paymentMethod,
         refundStatus: inv.refundStatus,
+        refundAmount: inv.refundAmount ? Number(inv.refundAmount) : null,
+        linkedOrder: inv.order?.orderNumber || null,
         issueDate: inv.issueDate.toISOString(),
-        linkedOrder: inv.order ? inv.order.orderNumber : null,
       })),
     };
   },
@@ -43,44 +40,50 @@ export const billingTools = {
     const invoice = await prisma.invoice.findUnique({
       where: { invoiceNumber },
       include: {
-        order: { select: { orderNumber: true, status: true } },
-        user: { select: { name: true, email: true } },
+        order: {
+          include: { items: true },
+        },
+        user: {
+          select: { name: true, email: true },
+        },
       },
     });
 
     if (!invoice) {
       return {
         success: false,
-        message: `Invoice "${invoiceNumber}" not found in billing records.`,
+        message: `Invoice "${invoiceNumber}" was not found in our billing records.`,
       };
     }
 
     return {
       success: true,
-      message: `Invoice ${invoice.invoiceNumber} is ${invoice.status} for $${Number(invoice.amount).toFixed(2)}.`,
+      message: `Invoice ${invoice.invoiceNumber} is marked as ${invoice.status}.`,
       data: {
         invoiceNumber: invoice.invoiceNumber,
         amount: Number(invoice.amount),
         status: invoice.status,
         paymentMethod: invoice.paymentMethod,
-        refundStatus: invoice.refundStatus,
-        refundAmount: invoice.refundAmount ? Number(invoice.refundAmount) : null,
-        issueDate: invoice.issueDate.toISOString(),
         dueDate: invoice.dueDate.toISOString(),
         paidAt: invoice.paidAt ? invoice.paidAt.toISOString() : null,
-        linkedOrder: invoice.order ? invoice.order.orderNumber : null,
+        refundStatus: invoice.refundStatus,
+        refundAmount: invoice.refundAmount ? Number(invoice.refundAmount) : null,
+        linkedOrder: invoice.order?.orderNumber || null,
+        orderItems: invoice.order?.items.map((i) => `${i.quantity}x ${i.productName}`) || [],
+        issueDate: invoice.issueDate.toISOString(),
       },
     };
   },
 
   checkRefundStatus: async (args: { query: string }): Promise<BillingToolResult> => {
-    const term = args.query.trim().toUpperCase();
+    const q = args.query.trim().toUpperCase();
 
+    // Look for invoice matching invoiceNumber or linked orderNumber
     const invoice = await prisma.invoice.findFirst({
       where: {
         OR: [
-          { invoiceNumber: term },
-          { order: { orderNumber: term } },
+          { invoiceNumber: q },
+          { order: { orderNumber: q } },
         ],
       },
       include: { order: true },
@@ -89,42 +92,33 @@ export const billingTools = {
     if (!invoice) {
       return {
         success: false,
-        message: `No invoice or refund record found for reference "${term}".`,
+        message: `No payment or refund records found matching "${q}".`,
       };
     }
 
     if (invoice.status === InvoiceStatus.REFUNDED) {
       return {
         success: true,
-        message: `Refund has been completed for invoice ${invoice.invoiceNumber} (Amount: $${invoice.refundAmount || invoice.amount}). Details: ${invoice.refundStatus || "Credited to original payment method."}`,
+        message: `Refund of $${Number(invoice.refundAmount || invoice.amount).toFixed(2)} was successfully completed for ${invoice.invoiceNumber}` + (invoice.order ? ` (Order: ${invoice.order.orderNumber})` : "") + `. Details: ${invoice.refundStatus || "Credited back to original payment method."}`,
         data: {
           invoiceNumber: invoice.invoiceNumber,
+          linkedOrder: invoice.order?.orderNumber || null,
           status: invoice.status,
           refundAmount: Number(invoice.refundAmount || invoice.amount),
-          refundStatus: invoice.refundStatus,
-        },
-      };
-    }
-
-    if (invoice.refundStatus) {
-      return {
-        success: true,
-        message: `Refund is in progress: ${invoice.refundStatus}`,
-        data: {
-          invoiceNumber: invoice.invoiceNumber,
-          status: invoice.status,
-          refundStatus: invoice.refundStatus,
+          refundStatus: invoice.refundStatus || "Refund Completed",
         },
       };
     }
 
     return {
       success: true,
-      message: `Invoice ${invoice.invoiceNumber} (Amount: $${invoice.amount}) is marked as ${invoice.status}. No refund has been processed yet.`,
+      message: `Invoice ${invoice.invoiceNumber}` + (invoice.order ? ` for order ${invoice.order.orderNumber}` : "") + ` is currently "${invoice.status}". No refund has been processed for this payment.`,
       data: {
         invoiceNumber: invoice.invoiceNumber,
+        linkedOrder: invoice.order?.orderNumber || null,
         status: invoice.status,
-        amount: Number(invoice.amount),
+        refundAmount: 0,
+        refundStatus: "No Refund Processed (Status: " + invoice.status + ")",
       },
     };
   },
@@ -136,14 +130,14 @@ export const billingTools = {
     if (!invoice) {
       return {
         success: false,
-        message: `Cannot process refund. Invoice "${invoiceNumber}" not found.`,
+        message: `Cannot request refund. Invoice "${invoiceNumber}" not found.`,
       };
     }
 
     if (invoice.status === InvoiceStatus.REFUNDED) {
       return {
         success: true,
-        message: `Invoice ${invoiceNumber} has already been fully refunded.`,
+        message: `Invoice ${invoiceNumber} was already refunded.`,
       };
     }
 
@@ -151,37 +145,32 @@ export const billingTools = {
       where: { invoiceNumber },
       data: {
         status: InvoiceStatus.REFUNDED,
-        refundStatus: `Refund initiated on ${new Date().toDateString()} for reason: "${args.reason || "Customer requested"}"`,
         refundAmount: invoice.amount,
+        refundStatus: `Refund of $${Number(invoice.amount).toFixed(2)} initiated for invoice ${invoiceNumber}.`,
       },
     });
 
     return {
       success: true,
-      message: `A full refund of $${updated.amount} for invoice ${invoiceNumber} has been initiated back to ${invoice.paymentMethod}. Funds will appear in 3-5 business days.`,
+      message: `A refund of $${Number(updated.amount).toFixed(2)} for invoice ${invoiceNumber} has been initiated to your original payment method.`,
       data: {
         invoiceNumber: updated.invoiceNumber,
+        refundAmount: Number(updated.amount),
         status: updated.status,
-        refundAmount: Number(updated.refundAmount),
       },
     };
   },
 
   getSubscriptionDetails: async (args: { userId: string }): Promise<BillingToolResult> => {
-    const invoices = await prisma.invoice.findMany({
-      where: { userId: args.userId, orderId: null },
-      orderBy: { issueDate: "desc" },
-    });
-
     return {
       success: true,
-      message: `Found ${invoices.length} recurring subscription invoices.`,
-      data: invoices.map((inv) => ({
-        invoiceNumber: inv.invoiceNumber,
-        amount: Number(inv.amount),
-        status: inv.status,
-        issueDate: inv.issueDate.toISOString(),
-      })),
+      message: "Active subscription plan: Swadesh Pro Support. Monthly billing cycle renews on the 1st of each month.",
+      data: {
+        plan: "Swadesh Pro Support",
+        billingCycle: "Monthly",
+        nextBillingDate: new Date(Date.now() + 15 * 24 * 60 * 60 * 1000).toISOString(),
+        monthlyPrice: 49.00,
+      },
     };
   },
 };

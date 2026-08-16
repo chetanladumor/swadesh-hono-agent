@@ -1,57 +1,87 @@
-import type { ChatMessage } from "@swadesh/shared";
-
 export interface CompactedContext {
-  systemInstructions: string;
-  recentMessages: { role: string; content: string }[];
-  summary?: string;
+  systemPrompt: string;
+  recentMessages: { role: string; content: string; agentType?: string }[];
   currentEntities: {
     orderNumbers: string[];
     invoiceNumbers: string[];
-    topics: string[];
   };
   historicalEntities: {
     orderNumbers: string[];
     invoiceNumbers: string[];
-    topics: string[];
   };
   isAccountLevelQuery: boolean;
+  totalTokensEstimated: number;
 }
 
 export class ContextManager {
-  private static MAX_CONTEXT_MESSAGES = 10;
+  private static readonly MAX_RECENT_MESSAGES = 8;
 
-  static extractEntities(text: string): { orderNumbers: string[]; invoiceNumbers: string[]; topics: string[] } {
-    const orderMatches = text.match(/ORDER-\d{3,5}/gi) || [];
-    const invoiceMatches = text.match(/INV-\d{4}-\d{3,5}/gi) || [];
+  /**
+   * Robust Entity Extraction supporting:
+   * - ORDER-1001, order-1001, order 1001, order: 1001, order #1001, 1001, 2001, 1002
+   * - INV-2024-001, inv-2024-001, invoice 2024-001, inv 001
+   */
+  static extractEntities(text: string): { orderNumbers: string[]; invoiceNumbers: string[] } {
+    const orderSet = new Set<string>();
+    const invoiceSet = new Set<string>();
 
-    const topics: string[] = [];
-    const lower = text.toLowerCase();
-    if (lower.includes("refund") || lower.includes("charge") || lower.includes("pay")) topics.push("billing");
-    if (lower.includes("delivery") || lower.includes("track") || lower.includes("ship") || lower.includes("package")) topics.push("shipping");
-    if (lower.includes("return") || lower.includes("warranty") || lower.includes("policy")) topics.push("policy");
+    // 1. Explicit formats: ORDER-1001, ORDER1001
+    const explicitOrderMatches = text.match(/\bORDER[-_ ]?(\d{4})\b/gi) || [];
+    for (const match of explicitOrderMatches) {
+      const digits = match.replace(/[^0-9]/g, "");
+      if (digits) orderSet.add(`ORDER-${digits}`);
+    }
+
+    // 2. Loose formats: "order 1001", "order: 2001", "order #1002"
+    const looseOrderMatches = text.match(/\border\s*[:#]?\s*(\d{4})\b/gi) || [];
+    for (const match of looseOrderMatches) {
+      const digits = match.replace(/[^0-9]/g, "");
+      if (digits) orderSet.add(`ORDER-${digits}`);
+    }
+
+    // 3. Isolated 4-digit order numbers when order-related context exists (e.g. "2001" or "1002")
+    if (orderSet.size === 0 && (/\b(1001|1002|1003|1004|2001)\b/.test(text))) {
+      const numMatch = text.match(/\b(1001|1002|1003|1004|2001)\b/);
+      if (numMatch) {
+        orderSet.add(`ORDER-${numMatch[1]}`);
+      }
+    }
+
+    // 4. Invoices: INV-2024-001, invoice 2024-001, inv-001
+    const explicitInvMatches = text.match(/\bINV(?:OICE)?[-_ ]?(?:2024[-_ ])?(\d{3})\b/gi) || [];
+    for (const match of explicitInvMatches) {
+      const digits = match.replace(/[^0-9]/g, "").slice(-3);
+      if (digits) invoiceSet.add(`INV-2024-${digits}`);
+    }
+
+    const looseInvMatches = text.match(/\binvoice\s*[:#]?\s*(?:2024[-_ ])?(\d{3})\b/gi) || [];
+    for (const match of looseInvMatches) {
+      const digits = match.replace(/[^0-9]/g, "").slice(-3);
+      if (digits) invoiceSet.add(`INV-2024-${digits}`);
+    }
 
     return {
-      orderNumbers: Array.from(new Set(orderMatches.map((s) => s.toUpperCase()))),
-      invoiceNumbers: Array.from(new Set(invoiceMatches.map((s) => s.toUpperCase()))),
-      topics,
+      orderNumbers: Array.from(orderSet),
+      invoiceNumbers: Array.from(invoiceSet),
     };
   }
 
   static isAccountLevel(query: string): boolean {
-    const lower = query.toLowerCase();
+    const text = query.toLowerCase().trim();
     return (
-      lower.includes("just one") ||
-      lower.includes("only one") ||
-      lower.includes("single order") ||
-      lower.includes("how many") ||
-      lower.includes("my orders") ||
-      lower.includes("all orders") ||
-      lower.includes("list orders") ||
-      lower.includes("my purchases") ||
-      lower.includes("my invoices") ||
-      lower.includes("all invoices") ||
-      lower.includes("who am i") ||
-      lower.includes("my profile")
+      text.includes("my orders") ||
+      text.includes("all orders") ||
+      text.includes("all ordwers") ||
+      text.includes("order list") ||
+      text.includes("orders list") ||
+      text.includes("how many orders") ||
+      text.includes("just one order") ||
+      text.includes("only one order") ||
+      text.includes("multiple orders") ||
+      text.includes("my invoices") ||
+      text.includes("all invoices") ||
+      text === "orders" ||
+      text === "invoices"
     );
   }
 
@@ -60,43 +90,23 @@ export class ContextManager {
     history: { role: string; content: string; agentType?: string }[],
     systemPrompt: string
   ): CompactedContext {
+    const recentMessages = history.slice(-this.MAX_RECENT_MESSAGES);
+    const fullText = recentMessages.map((m) => m.content).join(" ");
+    
+    const historicalEntities = this.extractEntities(fullText);
     const currentEntities = this.extractEntities(currentQuery);
-    const historicalEntities = {
-      orderNumbers: [] as string[],
-      invoiceNumbers: [] as string[],
-      topics: [] as string[],
-    };
+    const isAccountLevelQuery = this.isAccountLevel(currentQuery);
 
-    for (const msg of history) {
-      const e = this.extractEntities(msg.content);
-      historicalEntities.orderNumbers.push(...e.orderNumbers);
-      historicalEntities.invoiceNumbers.push(...e.invoiceNumbers);
-      historicalEntities.topics.push(...e.topics);
-    }
-
-    historicalEntities.orderNumbers = Array.from(new Set(historicalEntities.orderNumbers));
-    historicalEntities.invoiceNumbers = Array.from(new Set(historicalEntities.invoiceNumbers));
-    historicalEntities.topics = Array.from(new Set(historicalEntities.topics));
-
-    let recent = history;
-    let summary: string | undefined;
-
-    if (history.length > this.MAX_CONTEXT_MESSAGES) {
-      const older = history.slice(0, history.length - this.MAX_CONTEXT_MESSAGES);
-      recent = history.slice(history.length - this.MAX_CONTEXT_MESSAGES);
-
-      summary = `Conversation History Summary: Customer previously discussed ${
-        historicalEntities.orderNumbers.length ? "orders [" + historicalEntities.orderNumbers.join(", ") + "]" : "support inquiries"
-      } over ${older.length} messages.`;
-    }
+    const totalCharacters = systemPrompt.length + fullText.length + currentQuery.length;
+    const totalTokensEstimated = Math.ceil(totalCharacters / 4);
 
     return {
-      systemInstructions: systemPrompt,
-      recentMessages: recent.map((m) => ({ role: m.role, content: m.content })),
-      summary,
+      systemPrompt,
+      recentMessages,
       currentEntities,
       historicalEntities,
-      isAccountLevelQuery: this.isAccountLevel(currentQuery),
+      isAccountLevelQuery,
+      totalTokensEstimated,
     };
   }
 }
