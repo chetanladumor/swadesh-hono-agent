@@ -33,4 +33,4 @@ COPY --from=builder /app/packages/shared ./packages/shared
 
 EXPOSE 3001
 
-CMD ["sh", "-c", "cd apps/backend && npx prisma db push && npx tsx prisma/seed.ts && node --loader tsx src/index.ts"]
+CMD ["sh", "-c", "cd apps/backend && npx prisma db push && npx tsx prisma/seed.ts && npx tsx src/index.ts"]
