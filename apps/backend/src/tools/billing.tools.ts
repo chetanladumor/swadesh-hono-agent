@@ -96,6 +96,7 @@ export const billingTools = {
       };
     }
 
+    // 1. If refund was already finalized
     if (invoice.status === InvoiceStatus.REFUNDED) {
       return {
         success: true,
@@ -103,22 +104,38 @@ export const billingTools = {
         data: {
           invoiceNumber: invoice.invoiceNumber,
           linkedOrder: invoice.order?.orderNumber || null,
-          status: invoice.status,
+          status: "REFUNDED",
           refundAmount: Number(invoice.refundAmount || invoice.amount),
           refundStatus: invoice.refundStatus || "Refund Completed",
         },
       };
     }
 
+    // 2. If a return was authorized and refund is pending warehouse receipt
+    if (invoice.refundStatus && (invoice.refundStatus.includes("RMA") || invoice.refundStatus.includes("authorized") || invoice.refundStatus.includes("scheduled"))) {
+      return {
+        success: true,
+        message: `Invoice ${invoice.invoiceNumber}` + (invoice.order ? ` (Order: ${invoice.order.orderNumber})` : "") + ` is currently "PAID". Return authorization is active: ${invoice.refundStatus}. Your refund of $${Number(invoice.amount).toFixed(2)} will be credited to ${invoice.paymentMethod} within 3–5 business days of warehouse receipt.`,
+        data: {
+          invoiceNumber: invoice.invoiceNumber,
+          linkedOrder: invoice.order?.orderNumber || null,
+          status: "REFUND_PENDING (Awaiting Return Shipment)",
+          refundAmount: Number(invoice.amount),
+          refundStatus: invoice.refundStatus,
+        },
+      };
+    }
+
+    // 3. Normal Paid invoice with no refund requested
     return {
       success: true,
-      message: `Invoice ${invoice.invoiceNumber}` + (invoice.order ? ` for order ${invoice.order.orderNumber}` : "") + ` is currently "${invoice.status}". No refund has been processed for this payment.`,
+      message: `Invoice ${invoice.invoiceNumber}` + (invoice.order ? ` for order ${invoice.order.orderNumber}` : "") + ` is currently "PAID". No return or refund request is on file for this payment.`,
       data: {
         invoiceNumber: invoice.invoiceNumber,
         linkedOrder: invoice.order?.orderNumber || null,
-        status: invoice.status,
+        status: "PAID",
         refundAmount: 0,
-        refundStatus: "No Refund Processed (Status: " + invoice.status + ")",
+        refundStatus: "No Refund Requested",
       },
     };
   },
