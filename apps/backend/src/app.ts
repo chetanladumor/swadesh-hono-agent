@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
+import { serveStatic } from "@hono/node-server/serve-static";
 import { errorHandler } from "./middlewares/errorHandler.js";
 import { createRateLimiter } from "./middlewares/rateLimiter.js";
 import { authMiddleware } from "./middlewares/auth.middleware.js";
@@ -8,6 +9,8 @@ import { chatRoutes } from "./routes/chat.routes.js";
 import { agentRoutes } from "./routes/agent.routes.js";
 import { healthRoutes } from "./routes/health.routes.js";
 import { userRoutes } from "./routes/user.routes.js";
+import path from "node:path";
+import fs from "node:fs";
 
 export const app = new Hono();
 
@@ -28,7 +31,7 @@ app.use("/api/*", createRateLimiter({ maxRequests: 100, windowMs: 60 * 1000 }));
 // Auth Middleware for Chat Routes
 app.use("/api/chat/*", authMiddleware);
 
-// Mount Routes under /api
+// Mount API Routes under /api
 export const appRoutes = app
   .basePath("/api")
   .route("/", healthRoutes)
@@ -36,8 +39,18 @@ export const appRoutes = app
   .route("/", userRoutes)
   .route("/", chatRoutes);
 
-// Global Error Handling Middleware
+// Global Error Handling Middleware for APIs
 app.onError(errorHandler);
+
+// Production Single-Server Static Frontend Serving
+const frontendDistPath = path.resolve(process.cwd(), "apps/frontend/dist");
+const localDistPath = path.resolve(process.cwd(), "../frontend/dist");
+const targetDist = fs.existsSync(frontendDistPath) ? frontendDistPath : localDistPath;
+
+if (fs.existsSync(targetDist)) {
+  app.use("/*", serveStatic({ root: path.relative(process.cwd(), targetDist) }));
+  app.get("*", serveStatic({ path: path.join(path.relative(process.cwd(), targetDist), "index.html") }));
+}
 
 // Export Hono RPC AppType for frontend client
 export type AppType = typeof appRoutes;
