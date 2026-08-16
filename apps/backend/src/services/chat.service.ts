@@ -46,7 +46,7 @@ export class ChatService {
   static async deleteConversation(id: string, authenticatedUserId?: string) {
     const conversation = await prisma.conversation.findUnique({ where: { id } });
     if (!conversation) {
-      throw new ApiError(404, `Conversation "${id}" not found.`);
+      return { success: true, message: `Conversation "${id}" was already removed.` };
     }
 
     if (authenticatedUserId && conversation.userId !== authenticatedUserId) {
