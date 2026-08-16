@@ -7,69 +7,73 @@ export interface SupportToolResult {
 }
 
 export const supportTools = {
-  queryKnowledgeBase: async (args: { query: string; category?: string }): Promise<SupportToolResult> => {
-    const query = args.query.toLowerCase().trim();
-    const words = query.split(/\s+/).filter((w) => w.length > 2);
-
-    const allArticles = await prisma.knowledgeBase.findMany();
-
-    const matches = allArticles.filter((art) => {
-      const matchCategory = args.category
-        ? art.category.toLowerCase().includes(args.category.toLowerCase())
-        : true;
-
-      const matchContent =
-        art.title.toLowerCase().includes(query) ||
-        art.content.toLowerCase().includes(query) ||
-        art.keywords.some((k) => words.some((w) => k.toLowerCase().includes(w) || w.includes(k.toLowerCase())));
-
-      return matchCategory && matchContent;
+  getUserProfile: async (args: { userId: string }): Promise<SupportToolResult> => {
+    const user = await prisma.user.findUnique({
+      where: { id: args.userId },
+      select: { id: true, name: true, email: true, phone: true, address: true },
     });
+
+    if (!user) {
+      return { success: false, message: `User "${args.userId}" not found.` };
+    }
+
+    return {
+      success: true,
+      message: `Profile found for ${user.name}.`,
+      data: user,
+    };
+  },
+
+  queryKnowledgeBase: async (args: { query: string; category?: string }): Promise<SupportToolResult> => {
+    const articles = await prisma.knowledgeBase.findMany({
+      where: args.category ? { category: args.category } : undefined,
+    });
+
+    const q = args.query.toLowerCase();
+    const matches = articles.filter(
+      (a) =>
+        a.title.toLowerCase().includes(q) ||
+        a.content.toLowerCase().includes(q) ||
+        a.keywords.some((k) => q.includes(k.toLowerCase()))
+    );
 
     if (matches.length === 0) {
       return {
-        success: false,
-        message: `No specific policy article found matching "${args.query}". Providing general support guidelines.`,
-        data: allArticles.map((a) => ({ title: a.title, category: a.category })),
+        success: true,
+        message: "No exact knowledge base match found. Returning general customer policy guidelines.",
+        data: articles.slice(0, 2),
       };
     }
 
     return {
       success: true,
-      message: `Found ${matches.length} matching policy articles.`,
-      data: matches.map((m) => ({
-        title: m.title,
-        category: m.category,
-        content: m.content,
-      })),
+      message: `Found ${matches.length} relevant articles in knowledge base.`,
+      data: matches,
     };
   },
 
-  queryConversationHistory: async (args: { userId?: string; conversationId?: string; keyword?: string }): Promise<SupportToolResult> => {
-    const where: any = {};
-    if (args.conversationId) where.conversationId = args.conversationId;
-    if (args.userId) where.conversation = { userId: args.userId };
-
+  queryConversationHistory: async (args: {
+    userId?: string;
+    conversationId?: string;
+    keyword?: string;
+  }): Promise<SupportToolResult> => {
     const messages = await prisma.message.findMany({
-      where,
+      where: {
+        conversationId: args.conversationId,
+        content: args.keyword ? { contains: args.keyword, mode: "insensitive" } : undefined,
+      },
       orderBy: { createdAt: "asc" },
-      take: 20,
-      include: { conversation: { select: { title: true, userId: true } } },
+      take: 10,
     });
-
-    const filtered = args.keyword
-      ? messages.filter((m) => m.content.toLowerCase().includes(args.keyword!.toLowerCase()))
-      : messages;
 
     return {
       success: true,
-      message: `Retrieved ${filtered.length} relevant historical messages.`,
-      data: filtered.map((m) => ({
-        id: m.id,
+      message: `Retrieved ${messages.length} previous messages from conversation history.`,
+      data: messages.map((m) => ({
         role: m.role,
         content: m.content,
         agent: m.agentType,
-        createdAt: m.createdAt.toISOString(),
+        timestamp: m.createdAt.toISOString(),
       })),
     };
   },
