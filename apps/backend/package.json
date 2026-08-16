@@ -1,0 +1,34 @@
+{
+  "name": "@swadesh/backend",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc && prisma generate",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit",
+    "db:push": "prisma db push",
+    "db:seed": "tsx prisma/seed.ts",
+    "db:studio": "prisma studio",
+    "prisma:generate": "prisma generate"
+  },
+  "dependencies": {
+    "@ai-sdk/google": "^1.2.22",
+    "@ai-sdk/openai": "^1.1.13",
+    "@google/generative-ai": "^0.24.1",
+    "@hono/node-server": "^1.13.8",
+    "@prisma/client": "^6.4.1",
+    "@swadesh/shared": "*",
+    "ai": "^4.1.45",
+    "dotenv": "^16.4.7",
+    "hono": "^4.7.2",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.9",
+    "prisma": "^6.4.1",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.2"
+  }
+}
